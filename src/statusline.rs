@@ -208,12 +208,11 @@ pub fn unquote_arg(quoted: &str, windows: bool) -> Option<String> {
         if let Some(after) = rest.strip_prefix(r"\'") {
             out.push('\'');
             rest = after;
-        } else if let Some(after) = rest.strip_prefix('\'') {
+        } else {
+            let after = rest.strip_prefix('\'')?;
             let end = after.find('\'')?;
             out.push_str(&after[..end]);
             rest = &after[end + 1..];
-        } else {
-            return None;
         }
     }
     Some(out)
