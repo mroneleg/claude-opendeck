@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Claude Usage</title>
+  <style>
+    body { font-family: sans-serif; font-size: 13px; color: #d4d4d8; background: transparent; margin: 0; padding: 8px; }
+    .row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+    .check { flex-direction: row; align-items: center; gap: 6px; }
+    label { color: #a1a1aa; }
+    select, input { background: #27272a; color: #fafafa; border: 1px solid #3f3f46; border-radius: 4px; padding: 4px 6px; }
+    button { background: #3f3f46; color: #fafafa; border: 0; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+    .status { font-size: 12px; margin: 6px 0; }
+    .ok { color: #22c55e; }
+    .warn { color: #f59e0b; }
+    .hint { color: #71717a; font-size: 11px; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div id="usageOptions" class="hidden">
+    <div class="row">
+      <label for="mode">Show</label>
+      <select id="mode">
+        <option value="both">Session + weekly</option>
+        <option value="session">Session (5 hour)</option>
+        <option value="weekly">Weekly (7 day)</option>
+        <option value="model">Per-model weekly (highest)</option>
+      </select>
+      <span class="hint">The white tick on each bar is where even spending across the window would be.</span>
+    </div>
+    <div class="row">
+      <label for="alertLow">Alert at (%)</label>
+      <input id="alertLow" type="number" min="0" max="100" step="1">
+    </div>
+    <div class="row">
+      <label for="alertHigh">And again at (%)</label>
+      <input id="alertHigh" type="number" min="0" max="100" step="1">
+      <span class="hint">Flashes the key and sends a desktop notification once per window. 0 turns an alert off.</span>
+    </div>
+  </div>
+  <div id="refreshOptions" class="hidden">
+    <div class="row">
+      <label for="refreshMinutes">Refresh every (minutes)</label>
+      <input id="refreshMinutes" type="number" min="1" max="60" step="1">
+      <span class="hint">Shared by all usage keys. Minimum 1. Press the key to refresh immediately.</span>
+    </div>
+  </div>
+  <div id="launchOptions" class="hidden">
+    <div class="row">
+      <label for="projectDir">Project folder</label>
+      <input id="projectDir" type="text" placeholder="~/WebstormProjects/my-project">
+      <span class="hint">Empty starts in your home folder.</span>
+    </div>
+    <div class="row">
+      <label for="terminalCommand">Terminal command</label>
+      <input id="terminalCommand" type="text">
+      <span class="hint">{dir} is replaced with the quoted project folder. Empty uses the default for this platform.</span>
+    </div>
+  </div>
+  <div id="needsYouHint" class="hidden">
+    <div class="row check"><input id="includeIdle" type="checkbox"><label for="includeIdle">Also light up for idle sessions</label></div>
+    <span class="hint">Lights up when a Claude Code session (terminal or VS Code) is waiting for permission or an answer. "Idle" means finished and waiting for your next prompt. Press the key to jump to the newest one.</span>
+    <div id="hooksStatus" class="status"></div>
+    <div class="row check">
+      <button id="installHooks" type="button">Install Claude Code hooks</button>
+      <button id="uninstallHooks" type="button">Remove</button>
+    </div>
+    <span class="hint">Adds this plugin's hooks to Claude Code's settings.json (a backup is kept). Running sessions pick them up after <code>/hooks</code> or a restart.</span>
+    <div id="focusNote" class="hint hidden">Jumping to the session's window is only supported on KDE Plasma (Linux) so far; the key still lights up.</div>
+  </div>
+
+  <script>
+    const DEFAULTS = { mode: 'both', refreshMinutes: 5, alertLow: 80, alertHigh: 95, projectDir: '', terminalCommand: '', includeIdle: false };
+    const NUMBERS = { refreshMinutes: 1, alertLow: 0, alertHigh: 0 };
+    const FIELDS = ['mode', 'refreshMinutes', 'alertLow', 'alertHigh', 'projectDir', 'terminalCommand'];
+    const CHECKBOXES = ['includeIdle'];
+    const $ = (id) => document.getElementById(id);
+    let socket;
+    let uuid;
+    let settings = { ...DEFAULTS };
+    let actionUuid;
+
+    function save() {
+      for (const id of FIELDS) {
+        const value = $(id).value;
+        settings[id] = id in NUMBERS ? Math.max(NUMBERS[id], Number(value) || (id === 'refreshMinutes' ? DEFAULTS.refreshMinutes : 0)) : value;
+      }
+      for (const id of CHECKBOXES) settings[id] = $(id).checked;
+      socket.send(JSON.stringify({ event: 'setSettings', context: uuid, payload: settings }));
+    }
+
+    // Entry point called by OpenDeck / Stream Deck.
+    window.connectElgatoStreamDeckSocket = (port, inUUID, registerEvent, _info, actionInfo) => {
+      uuid = inUUID;
+      const parsed = JSON.parse(actionInfo);
+      const action = parsed.action.split('.').pop();
+      settings = { ...DEFAULTS, ...(parsed.payload?.settings || {}) };
+      for (const id of FIELDS) $(id).value = settings[id];
+      for (const id of CHECKBOXES) $(id).checked = settings[id];
+      $('usageOptions').classList.toggle('hidden', action !== 'usage');
+      $('refreshOptions').classList.toggle('hidden', !['usage', 'breakdown', 'extrausage'].includes(action));
+      $('launchOptions').classList.toggle('hidden', action !== 'launch');
+      $('needsYouHint').classList.toggle('hidden', action !== 'needsyou');
+      socket = new WebSocket(`ws://127.0.0.1:${port}`);
+      socket.onopen = () => socket.send(JSON.stringify({ event: registerEvent, uuid }));
+      socket.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        if (message.event !== 'sendToPropertyInspector') return;
+        const payload = message.payload || {};
+        if (payload.type === 'status') {
+          // Show this platform's default when no command has been set.
+          $('terminalCommand').placeholder = payload.terminalCommand;
+          $('focusNote').classList.toggle('hidden', payload.focusSupported);
+        }
+        if ('hooksInstalled' in payload) {
+          const text = payload.type === 'hooksResult' ? payload.message
+            : payload.hooksInstalled ? 'Claude Code hooks are installed.' : 'Claude Code hooks are not installed.';
+          $('hooksStatus').textContent = text;
+          $('hooksStatus').className = `status ${payload.hooksInstalled ? 'ok' : 'warn'}`;
+        }
+      };
+      actionUuid = parsed.action;
+    };
+
+    function sendToPlugin(payload) {
+      socket.send(JSON.stringify({ event: 'sendToPlugin', action: actionUuid, context: uuid, payload }));
+    }
+    $('installHooks').addEventListener('click', () => sendToPlugin({ type: 'installHooks' }));
+    $('uninstallHooks').addEventListener('click', () => sendToPlugin({ type: 'uninstallHooks' }));
+
+    for (const id of [...FIELDS, ...CHECKBOXES]) $(id).addEventListener('change', save);
+  </script>
+</body>
+</html>

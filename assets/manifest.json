@@ -1,0 +1,153 @@
+{
+  "Name": "Claude Usage",
+  "Description": "Claude plan usage, pace and alerts, plus Claude Code session status from your Claude Code login",
+  "Author": "Mr. One Leg",
+  "Version": "1.0.0",
+  "SDKVersion": 2,
+  "Category": "Claude",
+  "CategoryIcon": "icons/category",
+  "Icon": "icons/plugin",
+  "URL": "https://github.com/mroneleg/claude-opendeck",
+  "OS": [
+    {
+      "Platform": "windows"
+    },
+    {
+      "Platform": "mac"
+    },
+    {
+      "Platform": "linux"
+    }
+  ],
+  "CodePaths": {
+    "x86_64-pc-windows-msvc": "claude-opendeck-x86_64-pc-windows-msvc.exe",
+    "x86_64-apple-darwin": "claude-opendeck-x86_64-apple-darwin",
+    "aarch64-apple-darwin": "claude-opendeck-aarch64-apple-darwin",
+    "x86_64-unknown-linux-gnu": "claude-opendeck-x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu": "claude-opendeck-aarch64-unknown-linux-gnu"
+  },
+  "CodePathWin": "claude-opendeck-x86_64-pc-windows-msvc.exe",
+  "CodePathMac": "claude-opendeck-x86_64-apple-darwin",
+  "CodePathLin": "claude-opendeck-x86_64-unknown-linux-gnu",
+  "Actions": [
+    {
+      "UUID": "com.mroneleg.claudeusage.usage",
+      "Name": "Claude Usage",
+      "Tooltip": "Session, weekly, or per-model usage with pace; press to refresh",
+      "Icon": "icons/usage",
+      "States": [
+        {
+          "Image": "icons/usage",
+          "ShowTitle": false
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": false,
+      "PropertyInspectorPath": "pi/index.html"
+    },
+    {
+      "UUID": "com.mroneleg.claudeusage.breakdown",
+      "Name": "Usage Breakdown",
+      "Tooltip": "This week's usage by surface (Claude Code, Chats, ...)",
+      "Icon": "icons/breakdown",
+      "States": [
+        {
+          "Image": "icons/breakdown",
+          "ShowTitle": false
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": false,
+      "PropertyInspectorPath": "pi/index.html"
+    },
+    {
+      "UUID": "com.mroneleg.claudeusage.extrausage",
+      "Name": "Extra Usage",
+      "Tooltip": "Spend on usage credits beyond your plan",
+      "Icon": "icons/extrausage",
+      "States": [
+        {
+          "Image": "icons/extrausage",
+          "ShowTitle": false
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": false,
+      "PropertyInspectorPath": "pi/index.html"
+    },
+    {
+      "UUID": "com.mroneleg.claudeusage.needsyou",
+      "Name": "Claude Needs You",
+      "Tooltip": "Lights up when a Claude Code session is waiting on you; press to jump to it",
+      "Icon": "icons/needsyou",
+      "States": [
+        {
+          "Image": "icons/needsyou",
+          "ShowTitle": false
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": false,
+      "PropertyInspectorPath": "pi/index.html"
+    },
+    {
+      "UUID": "com.mroneleg.claudeusage.sessions",
+      "Name": "Active Sessions",
+      "Tooltip": "Number of running Claude Code sessions",
+      "Icon": "icons/sessions",
+      "States": [
+        {
+          "Image": "icons/sessions",
+          "ShowTitle": false
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": false,
+      "PropertyInspectorPath": "pi/index.html"
+    },
+    {
+      "UUID": "com.mroneleg.claudeusage.activity",
+      "Name": "Today's Activity",
+      "Tooltip": "Tokens used today across Claude Code sessions",
+      "Icon": "icons/activity",
+      "States": [
+        {
+          "Image": "icons/activity",
+          "ShowTitle": false
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": false,
+      "PropertyInspectorPath": "pi/index.html"
+    },
+    {
+      "UUID": "com.mroneleg.claudeusage.launch",
+      "Name": "Launch Claude",
+      "Tooltip": "Open a terminal running Claude Code in a project",
+      "Icon": "icons/launch",
+      "States": [
+        {
+          "Image": "icons/launch",
+          "ShowTitle": false
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": true,
+      "PropertyInspectorPath": "pi/index.html"
+    }
+  ]
+}
