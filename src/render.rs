@@ -3,6 +3,7 @@
 use base64_encode::encode as base64;
 
 use crate::activity::Totals;
+use crate::sessions::Status;
 use crate::usage::{BreakdownRow, Spend, Usage, Window, expected_percent};
 
 const SIZE: u32 = 144;
@@ -15,6 +16,10 @@ pub const CLAUDE: &str = "#d97757";
 pub const CLAUDE_DARK: &str = "#b85a3b";
 pub const WARN: &str = "#f59e0b";
 pub const DANGER: &str = "#ef4444";
+pub const WORKING: &str = "#2563eb";
+pub const DONE: &str = "#16a34a";
+/// Text drawn on the accent colour; `theme` swaps it for a contrasting colour.
+pub const ON_ACCENT: &str = "#fffffe";
 /// Within this many points of the even-spend line counts as "on pace".
 const PACE_TOLERANCE: f64 = 5.0;
 
@@ -53,7 +58,7 @@ pub fn svg(body: &str, background: &str) -> String {
     )
 }
 
-fn data_uri(svg: &str) -> String {
+pub fn data_uri(svg: &str) -> String {
     format!("data:image/svg+xml;base64,{}", base64(svg.as_bytes()))
 }
 
@@ -369,7 +374,7 @@ pub fn breakdown_image(rows: &[BreakdownRow]) -> String {
         .take(4)
         .enumerate()
         .map(|(i, row)| {
-            let y = 40.0 + i as f64 * 27.0;
+            let y = 46.0 + i as f64 * 25.0;
             text(
                 10.0,
                 y,
@@ -392,10 +397,11 @@ pub fn breakdown_image(rows: &[BreakdownRow]) -> String {
             ) + &bar(10.0, y + 5.0, 124.0, 5.0, row.percent, None, Some(CLAUDE))
         })
         .collect();
+    // Heading low enough to clear a status badge in the top corner.
     image(
         &(text(
             72.0,
-            18.0,
+            25.0,
             "Week by surface",
             Text {
                 size: 13,
@@ -487,11 +493,11 @@ pub fn needs_you_image(waiting: usize, latest_project: Option<&str>, working: us
                 &heading,
                 Text {
                     size: 15,
-                    color: "#fff",
+                    color: ON_ACCENT,
                     bold: true,
                     ..TEXT
                 },
-            ) + r##"<circle cx="72" cy="66" r="22" fill="#fff"/>"##
+            ) + &format!(r#"<circle cx="72" cy="66" r="22" fill="{ON_ACCENT}"/>"#)
                 + &text(
                     72.0,
                     77.0,
@@ -509,7 +515,7 @@ pub fn needs_you_image(waiting: usize, latest_project: Option<&str>, working: us
                     &truncate(latest_project.unwrap_or(""), 16),
                     Text {
                         size: 15,
-                        color: "#fff",
+                        color: ON_ACCENT,
                         bold: true,
                         ..TEXT
                     },
@@ -520,53 +526,14 @@ pub fn needs_you_image(waiting: usize, latest_project: Option<&str>, working: us
                     "press to open",
                     Text {
                         size: 12,
-                        color: "#fff",
+                        color: ON_ACCENT,
                         ..TEXT
                     },
                 )),
             CLAUDE,
         );
     }
-    image(
-        &(text(
-            72.0,
-            30.0,
-            "Claude",
-            Text {
-                size: 15,
-                color: MUTED,
-                bold: true,
-                ..TEXT
-            },
-        ) + &format!(r#"<circle cx="72" cy="68" r="22" fill="none" stroke="{TRACK}" stroke-width="5"/>"#)
-            + &format!(
-                r#"<path d="M61 68 L69 76 L84 60" fill="none" stroke="{MUTED}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>"#
-            )
-            + &text(
-                72.0,
-                116.0,
-                "All clear",
-                Text {
-                    size: 15,
-                    bold: true,
-                    ..TEXT
-                },
-            )
-            + &text(
-                72.0,
-                134.0,
-                &if working > 0 {
-                    format!("{working} working")
-                } else {
-                    String::new()
-                },
-                Text {
-                    size: 12,
-                    color: MUTED,
-                    ..TEXT
-                },
-            )),
-    )
+    all_clear_image(working, 0)
 }
 
 /// Number of running Claude Code sessions.
@@ -692,7 +659,7 @@ pub fn launch_image(project: &str) -> String {
                 &truncate(name, 14),
                 Text {
                     size: 15,
-                    color: "#fff",
+                    color: ON_ACCENT,
                     bold: true,
                     ..TEXT
                 },
@@ -703,11 +670,299 @@ pub fn launch_image(project: &str) -> String {
                 "launch",
                 Text {
                     size: 12,
-                    color: "#fff",
+                    color: ON_ACCENT,
                     ..TEXT
                 },
             )),
         CLAUDE,
+    )
+}
+
+/// "just now", "4m ago", "2h ago", "3d ago".
+pub fn format_age(age_ms: i64) -> String {
+    let minutes = age_ms.max(0) / 60_000;
+    if minutes < 1 {
+        "just now".into()
+    } else if minutes < 60 {
+        format!("{minutes}m ago")
+    } else if minutes < 48 * 60 {
+        format!("{}h ago", minutes / 60)
+    } else {
+        format!("{}d ago", minutes / 1440)
+    }
+}
+
+/// Lit session-status key for working (blue) or done (green) sessions.
+/// Waiting uses [`needs_you_image`]; nothing lit uses [`all_clear_image`].
+pub fn status_image(status: Status, count: usize, project: Option<&str>) -> String {
+    let (background, heading, footer, glyph) = match status {
+        Status::Done => (
+            DONE,
+            if count == 1 {
+                "Done".to_owned()
+            } else {
+                format!("{count} done")
+            },
+            "press to clear",
+            r##"<path d="M58 66 L68 76 L88 56" fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>"##,
+        ),
+        _ => (
+            WORKING,
+            if count == 1 {
+                "Working".to_owned()
+            } else {
+                format!("{count} working")
+            },
+            "hold to open",
+            r##"<circle cx="58" cy="66" r="5" fill="#ffffff"/><circle cx="72" cy="66" r="5" fill="#ffffff" fill-opacity="0.75"/><circle cx="86" cy="66" r="5" fill="#ffffff" fill-opacity="0.5"/>"##,
+        ),
+    };
+    let white = Text {
+        color: "#ffffff",
+        ..TEXT
+    };
+    image_on(
+        &(text(
+            72.0,
+            30.0,
+            &heading,
+            Text {
+                size: 15,
+                bold: true,
+                ..white
+            },
+        ) + r##"<circle cx="72" cy="66" r="22" fill="none" stroke="#ffffff" stroke-opacity="0.5" stroke-width="3"/>"##
+            + glyph
+            + &text(
+                72.0,
+                112.0,
+                &truncate(project.unwrap_or(""), 16),
+                Text {
+                    size: 15,
+                    bold: true,
+                    ..white
+                },
+            )
+            + &text(72.0, 132.0, footer, Text { size: 12, ..white })),
+        background,
+    )
+}
+
+/// Nothing lights the key: a check mark and counts of what else is going on.
+pub fn all_clear_image(working: usize, done: usize) -> String {
+    let footer = match (working, done) {
+        (0, 0) => String::new(),
+        (w, 0) => format!("{w} working"),
+        (0, d) => format!("{d} done"),
+        (w, d) => format!("{w} working · {d} done"),
+    };
+    image(
+        &(text(
+            72.0,
+            30.0,
+            "Claude",
+            Text {
+                size: 15,
+                color: MUTED,
+                bold: true,
+                ..TEXT
+            },
+        ) + &format!(r#"<circle cx="72" cy="68" r="22" fill="none" stroke="{TRACK}" stroke-width="5"/>"#)
+            + &format!(
+                r#"<path d="M61 68 L69 76 L84 60" fill="none" stroke="{MUTED}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>"#
+            )
+            + &text(
+                72.0,
+                116.0,
+                "All clear",
+                Text {
+                    size: 15,
+                    bold: true,
+                    ..TEXT
+                },
+            )
+            + &text(
+                72.0,
+                134.0,
+                &footer,
+                Text {
+                    size: 12,
+                    color: MUTED,
+                    ..TEXT
+                },
+            )),
+    )
+}
+
+// --- dial (encoder) touch strip: 200x100, OpenDeck's "$A0" full-canvas layout ------
+
+const STRIP_W: u32 = 200;
+const STRIP_H: u32 = 100;
+
+fn strip(body: &str, background: &str) -> String {
+    data_uri(&format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{STRIP_W}" height="{STRIP_H}" viewBox="0 0 {STRIP_W} {STRIP_H}"><rect width="{STRIP_W}" height="{STRIP_H}" fill="{background}"/>{body}</svg>"#
+    ))
+}
+
+fn strip_row(window: &Window, y: f64, now: i64) -> String {
+    let pace = pace(window, now);
+    text(
+        12.0,
+        y,
+        &window.label,
+        Text {
+            size: 16,
+            color: MUTED,
+            bold: true,
+            anchor: "start",
+        },
+    ) + &text(
+        188.0,
+        y,
+        &pct(window.percent),
+        Text {
+            size: 20,
+            bold: true,
+            anchor: "end",
+            ..TEXT
+        },
+    ) + &bar(12.0, y + 7.0, 176.0, 7.0, window.percent, pace.map(|p| p.2), None)
+}
+
+/// Usage on a dial's touch strip, in the key's display mode.
+pub fn usage_strip(usage: &Usage, mode: &str, now: i64) -> String {
+    let single = |window: Option<&Window>, title: &str| match window {
+        None => strip(
+            &text(100.0, 56.0, &format!("{title}: n/a"), Text { color: MUTED, ..TEXT }),
+            BG,
+        ),
+        Some(w) => {
+            let mut body = text(
+                12.0,
+                26.0,
+                &truncate(title, 16),
+                Text {
+                    size: 15,
+                    color: MUTED,
+                    bold: true,
+                    anchor: "start",
+                },
+            ) + &text(
+                188.0,
+                58.0,
+                &pct(w.percent),
+                Text {
+                    size: 34,
+                    bold: true,
+                    anchor: "end",
+                    color: if w.percent >= 70.0 { color_for(w.percent) } else { FG },
+                },
+            ) + &bar(12.0, 70.0, 176.0, 9.0, w.percent, pace(w, now).map(|p| p.2), None);
+            body += &text(
+                12.0,
+                94.0,
+                &format!("resets {}", format_countdown(w.resets_at, now)),
+                Text {
+                    size: 12,
+                    color: MUTED,
+                    anchor: "start",
+                    ..TEXT
+                },
+            );
+            if let Some((label, color, _)) = pace(w, now) {
+                body += &text(
+                    188.0,
+                    94.0,
+                    &label,
+                    Text {
+                        size: 12,
+                        color,
+                        anchor: "end",
+                        ..TEXT
+                    },
+                );
+            }
+            strip(&body, BG)
+        }
+    };
+    match mode {
+        "session" => single(usage.session.as_ref(), "Session"),
+        "weekly" => single(usage.weekly.as_ref(), "Weekly"),
+        "model" => match usage.scoped.first() {
+            Some(top) => single(Some(top), &format!("{} weekly", top.label)),
+            None => single(None, "Per-model"),
+        },
+        _ => {
+            let rows: String = [usage.session.as_ref(), usage.weekly.as_ref()]
+                .iter()
+                .enumerate()
+                .filter_map(|(i, w)| w.map(|w| strip_row(w, 34.0 + i as f64 * 40.0, now)))
+                .collect();
+            strip(&rows, BG)
+        }
+    }
+}
+
+/// A message on a dial's touch strip (errors, "needs API", ...).
+pub fn message_strip(line1: &str, line2: &str, color: &str) -> String {
+    strip(
+        &(text(
+            100.0,
+            46.0,
+            line1,
+            Text {
+                size: 18,
+                bold: true,
+                ..TEXT
+            },
+        ) + &text(100.0, 72.0, line2, Text { color, ..TEXT })),
+        BG,
+    )
+}
+
+/// One session on a dial's touch strip: its status, project, and position.
+pub fn session_strip(status: Status, project: &str, index: usize, total: usize) -> String {
+    let (background, color) = match status {
+        Status::Waiting => (CLAUDE, ON_ACCENT),
+        Status::Working => (WORKING, "#ffffff"),
+        Status::Done => (DONE, "#ffffff"),
+        Status::Idle => (BG, FG),
+    };
+    let muted = if status == Status::Idle { MUTED } else { color };
+    strip(
+        &(text(
+            12.0,
+            28.0,
+            &format!("{} / {total}", index + 1),
+            Text {
+                size: 13,
+                color: muted,
+                anchor: "start",
+                ..TEXT
+            },
+        ) + &text(
+            188.0,
+            28.0,
+            status.label(),
+            Text {
+                size: 14,
+                color,
+                bold: true,
+                anchor: "end",
+            },
+        ) + &text(
+            100.0,
+            70.0,
+            &truncate(project, 18),
+            Text {
+                size: 22,
+                color,
+                bold: true,
+                ..TEXT
+            },
+        )),
+        background,
     )
 }
 
@@ -806,5 +1061,9 @@ mod tests {
         assert_eq!(truncate("managed-services-platform", 16), "managed-service…");
         let svg = svg_from_data_uri(&needs_you_image(2, Some("x<y"), 0)).unwrap();
         assert!(svg.contains("2 need you") && svg.contains("x&lt;y"));
+        assert_eq!(format_age(30_000), "just now");
+        assert_eq!(format_age(16 * 60_000), "16m ago");
+        assert_eq!(format_age(3 * 3_600_000), "3h ago");
+        assert_eq!(format_age(3 * 86_400_000), "3d ago");
     }
 }

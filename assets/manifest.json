@@ -1,8 +1,8 @@
 {
-  "Name": "Claude Usage",
-  "Description": "Claude plan usage, pace and alerts, plus Claude Code session status from your Claude Code login",
+  "Name": "Claude Code Command Deck",
+  "Description": "Claude Code on your deck: plan usage with pace and alerts, session status that jumps to the waiting window, activity and a launcher",
   "Author": "Mr. One Leg",
-  "Version": "1.0.0",
+  "Version": "1.1.0",
   "SDKVersion": 2,
   "Category": "Claude",
   "CategoryIcon": "icons/category",
@@ -32,8 +32,8 @@
   "Actions": [
     {
       "UUID": "com.mroneleg.claudeusage.usage",
-      "Name": "Claude Usage",
-      "Tooltip": "Session, weekly, or per-model usage with pace; press to refresh",
+      "Name": "Plan Usage",
+      "Tooltip": "Session, weekly or per-model usage with pace. Tap: next mode. Hold: refresh.",
       "Icon": "icons/usage",
       "States": [
         {
@@ -42,15 +42,25 @@
         }
       ],
       "Controllers": [
-        "Keypad"
+        "Keypad",
+        "Encoder"
       ],
       "SupportedInMultiActions": false,
-      "PropertyInspectorPath": "pi/index.html"
+      "PropertyInspectorPath": "pi/index.html",
+      "Encoder": {
+        "layout": "$A0",
+        "TriggerDescription": {
+          "Rotate": "Change mode",
+          "Push": "Refresh",
+          "Touch": "Refresh",
+          "LongTouch": "Refresh"
+        }
+      }
     },
     {
       "UUID": "com.mroneleg.claudeusage.breakdown",
       "Name": "Usage Breakdown",
-      "Tooltip": "This week's usage by surface (Claude Code, Chats, ...)",
+      "Tooltip": "This week's usage by surface (Claude Code, Chats, ...). Press to refresh.",
       "Icon": "icons/breakdown",
       "States": [
         {
@@ -67,7 +77,7 @@
     {
       "UUID": "com.mroneleg.claudeusage.extrausage",
       "Name": "Extra Usage",
-      "Tooltip": "Spend on usage credits beyond your plan",
+      "Tooltip": "Spend on usage credits beyond your plan. Press to refresh.",
       "Icon": "icons/extrausage",
       "States": [
         {
@@ -83,8 +93,8 @@
     },
     {
       "UUID": "com.mroneleg.claudeusage.needsyou",
-      "Name": "Claude Needs You",
-      "Tooltip": "Lights up when a Claude Code session is waiting on you; press to jump to it",
+      "Name": "Session Status",
+      "Tooltip": "Lights up when a Claude Code session needs you (optionally while working or when done). Tap: jump to it or clear finished ones. Hold: open the latest.",
       "Icon": "icons/needsyou",
       "States": [
         {
@@ -93,10 +103,20 @@
         }
       ],
       "Controllers": [
-        "Keypad"
+        "Keypad",
+        "Encoder"
       ],
       "SupportedInMultiActions": false,
-      "PropertyInspectorPath": "pi/index.html"
+      "PropertyInspectorPath": "pi/index.html",
+      "Encoder": {
+        "layout": "$A0",
+        "TriggerDescription": {
+          "Rotate": "Pick a session",
+          "Push": "Jump to it",
+          "Touch": "Jump to it",
+          "LongTouch": "Open the latest"
+        }
+      }
     },
     {
       "UUID": "com.mroneleg.claudeusage.sessions",

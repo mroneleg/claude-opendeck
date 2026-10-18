@@ -2,14 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Claude Usage</title>
+  <title>Claude Code Command Deck</title>
   <style>
     body { font-family: sans-serif; font-size: 13px; color: #d4d4d8; background: transparent; margin: 0; padding: 8px; }
     .row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
     .check { flex-direction: row; align-items: center; gap: 6px; }
+    .inline { flex-direction: row; align-items: center; gap: 8px; }
     label { color: #a1a1aa; }
     select, input { background: #27272a; color: #fafafa; border: 1px solid #3f3f46; border-radius: 4px; padding: 4px 6px; }
+    input[type=color] { padding: 0; width: 44px; height: 26px; }
     button { background: #3f3f46; color: #fafafa; border: 0; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+    h4 { color: #a1a1aa; font-size: 12px; margin: 14px 0 6px; text-transform: uppercase; letter-spacing: 0.04em; }
     .status { font-size: 12px; margin: 6px 0; }
     .ok { color: #22c55e; }
     .warn { color: #f59e0b; }
@@ -27,7 +30,7 @@
         <option value="weekly">Weekly (7 day)</option>
         <option value="model">Per-model weekly (highest)</option>
       </select>
-      <span class="hint">The white tick on each bar is where even spending across the window would be.</span>
+      <span class="hint">Tap the key (or turn the dial) for the next mode; hold it to refresh. The white tick on each bar is where even spending across the window would be.</span>
     </div>
     <div class="row">
       <label for="alertLow">Alert at (%)</label>
@@ -39,11 +42,27 @@
       <span class="hint">Flashes the key and sends a desktop notification once per window. 0 turns an alert off.</span>
     </div>
   </div>
+  <div id="sourceOptions" class="hidden">
+    <div class="row">
+      <label for="dataSource">Data source</label>
+      <select id="dataSource">
+        <option value="api">Usage API + status line</option>
+        <option value="statusline">Status line only (never reads your login)</option>
+      </select>
+      <span class="hint">The status line gives fresher 5h/7d numbers while a Claude Code session is running, without using your login. Per-model, breakdown and extra usage need the API.</span>
+    </div>
+    <div id="statuslineStatus" class="status"></div>
+    <div class="row check">
+      <button id="installStatusline" type="button">Use Claude Code's status line</button>
+      <button id="uninstallStatusline" type="button">Remove</button>
+    </div>
+    <span class="hint">Wraps your existing status line command (it keeps showing), or adds a short one. A backup of settings.json is kept.</span>
+  </div>
   <div id="refreshOptions" class="hidden">
     <div class="row">
       <label for="refreshMinutes">Refresh every (minutes)</label>
       <input id="refreshMinutes" type="number" min="1" max="60" step="1">
-      <span class="hint">Shared by all usage keys. Minimum 1. Press the key to refresh immediately.</span>
+      <span class="hint">Shared by all usage keys. Minimum 1; slows down automatically while the API is failing.</span>
     </div>
   </div>
   <div id="launchOptions" class="hidden">
@@ -58,9 +77,10 @@
       <span class="hint">{dir} is replaced with the quoted project folder. Empty uses the default for this platform.</span>
     </div>
   </div>
-  <div id="needsYouHint" class="hidden">
-    <div class="row check"><input id="includeIdle" type="checkbox"><label for="includeIdle">Also light up for idle sessions</label></div>
-    <span class="hint">Lights up when a Claude Code session (terminal or VS Code) is waiting for permission or an answer. "Idle" means finished and waiting for your next prompt. Press the key to jump to the newest one.</span>
+  <div id="statusOptions" class="hidden">
+    <span class="hint">Always lights up when a Claude Code session (terminal or VS Code) is waiting for permission or an answer. Tap to jump to it; with nothing waiting, tap clears finished sessions. Hold to open the latest session.</span>
+    <div class="row check" style="margin-top: 8px"><input id="lightWorking" type="checkbox"><label for="lightWorking">Also light up while Claude is working</label></div>
+    <div class="row check"><input id="lightDone" type="checkbox"><label for="lightDone">Also light up when a session is done</label></div>
     <div id="hooksStatus" class="status"></div>
     <div class="row check">
       <button id="installHooks" type="button">Install Claude Code hooks</button>
@@ -70,11 +90,29 @@
     <div id="focusNote" class="hint hidden">Jumping to the session's window is only supported on KDE Plasma (Linux) so far; the key still lights up.</div>
   </div>
 
+  <h4>Appearance</h4>
+  <div class="row inline">
+    <label for="background">Background</label>
+    <input id="background" type="color">
+    <button id="oled" type="button">OLED black</button>
+  </div>
+  <div class="row inline">
+    <label for="accent">Accent</label>
+    <input id="accent" type="color">
+    <button id="resetColors" type="button">Reset</button>
+  </div>
+
   <script>
-    const DEFAULTS = { mode: 'both', refreshMinutes: 5, alertLow: 80, alertHigh: 95, projectDir: '', terminalCommand: '', includeIdle: false };
+    const DEFAULTS = {
+      mode: 'both', refreshMinutes: 5, alertLow: 80, alertHigh: 95, projectDir: '', terminalCommand: '',
+      dataSource: 'api', lightWorking: false, lightDone: false, background: '', accent: '',
+    };
+    const COLOR_DEFAULTS = { background: '#18181b', accent: '#d97757' };
     const NUMBERS = { refreshMinutes: 1, alertLow: 0, alertHigh: 0 };
-    const FIELDS = ['mode', 'refreshMinutes', 'alertLow', 'alertHigh', 'projectDir', 'terminalCommand'];
-    const CHECKBOXES = ['includeIdle'];
+    const FIELDS = ['mode', 'refreshMinutes', 'alertLow', 'alertHigh', 'projectDir', 'terminalCommand', 'dataSource'];
+    const CHECKBOXES = ['lightWorking', 'lightDone'];
+    const COLORS = ['background', 'accent'];
+    const USAGE_KEYS = ['usage', 'breakdown', 'extrausage'];
     const $ = (id) => document.getElementById(id);
     let socket;
     let uuid;
@@ -87,7 +125,20 @@
         settings[id] = id in NUMBERS ? Math.max(NUMBERS[id], Number(value) || (id === 'refreshMinutes' ? DEFAULTS.refreshMinutes : 0)) : value;
       }
       for (const id of CHECKBOXES) settings[id] = $(id).checked;
+      // The 1.0 name for lightDone; drop it so the new setting is what counts.
+      delete settings.includeIdle;
       socket.send(JSON.stringify({ event: 'setSettings', context: uuid, payload: settings }));
+    }
+
+    function setColor(id, value) {
+      settings[id] = value;
+      $(id).value = value || COLOR_DEFAULTS[id];
+      save();
+    }
+
+    function showInstalled(element, installed, yes, no, message) {
+      element.textContent = message || (installed ? yes : no);
+      element.className = `status ${installed ? 'ok' : 'warn'}`;
     }
 
     // Entry point called by OpenDeck / Stream Deck.
@@ -96,12 +147,15 @@
       const parsed = JSON.parse(actionInfo);
       const action = parsed.action.split('.').pop();
       settings = { ...DEFAULTS, ...(parsed.payload?.settings || {}) };
+      if (parsed.payload?.settings?.lightDone === undefined && settings.includeIdle) settings.lightDone = true;
       for (const id of FIELDS) $(id).value = settings[id];
       for (const id of CHECKBOXES) $(id).checked = settings[id];
+      for (const id of COLORS) $(id).value = settings[id] || COLOR_DEFAULTS[id];
       $('usageOptions').classList.toggle('hidden', action !== 'usage');
-      $('refreshOptions').classList.toggle('hidden', !['usage', 'breakdown', 'extrausage'].includes(action));
+      $('sourceOptions').classList.toggle('hidden', !USAGE_KEYS.includes(action));
+      $('refreshOptions').classList.toggle('hidden', !USAGE_KEYS.includes(action));
       $('launchOptions').classList.toggle('hidden', action !== 'launch');
-      $('needsYouHint').classList.toggle('hidden', action !== 'needsyou');
+      $('statusOptions').classList.toggle('hidden', action !== 'needsyou');
       socket = new WebSocket(`ws://127.0.0.1:${port}`);
       socket.onopen = () => socket.send(JSON.stringify({ event: registerEvent, uuid }));
       socket.onmessage = (event) => {
@@ -113,11 +167,14 @@
           $('terminalCommand').placeholder = payload.terminalCommand;
           $('focusNote').classList.toggle('hidden', payload.focusSupported);
         }
+        const result = payload.type === 'installResult' ? payload : null;
         if ('hooksInstalled' in payload) {
-          const text = payload.type === 'hooksResult' ? payload.message
-            : payload.hooksInstalled ? 'Claude Code hooks are installed.' : 'Claude Code hooks are not installed.';
-          $('hooksStatus').textContent = text;
-          $('hooksStatus').className = `status ${payload.hooksInstalled ? 'ok' : 'warn'}`;
+          const msg = result && /Hooks$/.test(result.action) ? result.message : null;
+          showInstalled($('hooksStatus'), payload.hooksInstalled, 'Claude Code hooks are installed.', 'Claude Code hooks are not installed.', msg);
+        }
+        if ('statuslineInstalled' in payload) {
+          const msg = result && /Statusline$/.test(result.action) ? result.message : null;
+          showInstalled($('statuslineStatus'), payload.statuslineInstalled, 'Status line is in use.', 'Status line not in use.', msg);
         }
       };
       actionUuid = parsed.action;
@@ -126,9 +183,12 @@
     function sendToPlugin(payload) {
       socket.send(JSON.stringify({ event: 'sendToPlugin', action: actionUuid, context: uuid, payload }));
     }
-    $('installHooks').addEventListener('click', () => sendToPlugin({ type: 'installHooks' }));
-    $('uninstallHooks').addEventListener('click', () => sendToPlugin({ type: 'uninstallHooks' }));
-
+    for (const type of ['installHooks', 'uninstallHooks', 'installStatusline', 'uninstallStatusline']) {
+      $(type).addEventListener('click', () => sendToPlugin({ type }));
+    }
+    for (const id of COLORS) $(id).addEventListener('input', () => setColor(id, $(id).value));
+    $('oled').addEventListener('click', () => setColor('background', '#000000'));
+    $('resetColors').addEventListener('click', () => { setColor('background', ''); setColor('accent', ''); });
     for (const id of [...FIELDS, ...CHECKBOXES]) $(id).addEventListener('change', save);
   </script>
 </body>

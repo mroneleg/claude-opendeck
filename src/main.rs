@@ -1,13 +1,18 @@
-use claude_opendeck::{cli, hook, hooks_install, plugin};
+use claude_opendeck::{cli, hook, hooks_install, plugin, statusline};
 
 const HELP: &str = "\
-claude-opendeck: Claude Usage plugin for OpenDeck / Stream Deck
+claude-opendeck: Claude Code Command Deck, a plugin for OpenDeck / Stream Deck
 
 USAGE:
-    claude-opendeck usage [--json]     Print plan usage
-    claude-opendeck install-hooks      Add the Claude Code hooks for \"Claude Needs You\"
-    claude-opendeck uninstall-hooks    Remove them again
-    claude-opendeck hook               (run by Claude Code) record a hook event from stdin
+    claude-opendeck usage [--json]         Print plan usage
+    claude-opendeck install-hooks          Add the Claude Code hooks for the session status key
+    claude-opendeck uninstall-hooks        Remove them again
+    claude-opendeck install-statusline     Use Claude Code's status line as a usage source
+                                           (wraps any status line command you already have)
+    claude-opendeck uninstall-statusline   Restore your previous status line
+    claude-opendeck hook                   (run by Claude Code) record a hook event from stdin
+    claude-opendeck statusline [-- CMD]    (run by Claude Code) save usage from stdin, then
+                                           print CMD's output (or a short default line)
     claude-opendeck --version
 
 OpenDeck starts it with -port/-pluginUUID/-registerEvent/-info to run the plugin.";
@@ -24,6 +29,20 @@ fn main() {
         "install-hooks" | "uninstall-hooks" => {
             let binary = std::env::current_exe().unwrap_or_default();
             match hooks_install::run(&binary, command == "uninstall-hooks") {
+                Ok(message) => {
+                    println!("{message}");
+                    0
+                }
+                Err(error) => {
+                    eprintln!("claude-opendeck: {error}");
+                    1
+                }
+            }
+        }
+        "statusline" => statusline::run(&args[2..]),
+        "install-statusline" | "uninstall-statusline" => {
+            let binary = std::env::current_exe().unwrap_or_default();
+            match statusline::install(&binary, command == "uninstall-statusline") {
                 Ok(message) => {
                     println!("{message}");
                     0

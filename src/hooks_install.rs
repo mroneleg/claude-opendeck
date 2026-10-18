@@ -1,5 +1,5 @@
 //! `install-hooks` / `uninstall-hooks`: add or remove the Claude Code hooks
-//! that feed the "Claude Needs You" key, in `settings.json` under Claude Code's
+//! that feed the Session Status key, in `settings.json` under Claude Code's
 //! config directory. Other settings and hooks are preserved, running it twice
 //! changes nothing, and the previous file is kept as `settings.json.bak`.
 
@@ -122,12 +122,29 @@ pub fn is_installed(binary: &Path) -> bool {
     apply(&settings, &hook_command(binary), false).1 == 0
 }
 
-/// Installs (or removes) the hooks for `binary`. Returns a human-readable summary.
-pub fn run(binary: &Path, uninstall: bool) -> anyhow::Result<String> {
+/// Claude Code's settings.json: (path, original text, parsed). A missing file
+/// reads as `{}`; an unparseable one is an error so we never clobber it.
+pub fn read_settings() -> anyhow::Result<(std::path::PathBuf, String, Value)> {
     let file = paths::claude_dir().join("settings.json");
     let original = std::fs::read_to_string(&file).unwrap_or_else(|_| "{}".into());
     let settings: Value = serde_json::from_str(&original)
         .map_err(|error| anyhow::anyhow!("{} is not valid JSON ({error}); not touching it", file.display()))?;
+    Ok((file, original, settings))
+}
+
+/// Writes updated settings, keeping the previous text as `settings.json.bak`.
+pub fn write_settings(file: &Path, original: &str, updated: &Value) -> anyhow::Result<()> {
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(file.with_extension("json.bak"), original)?;
+    std::fs::write(file, format!("{}\n", serde_json::to_string_pretty(updated)?))?;
+    Ok(())
+}
+
+/// Installs (or removes) the hooks for `binary`. Returns a human-readable summary.
+pub fn run(binary: &Path, uninstall: bool) -> anyhow::Result<String> {
+    let (file, original, settings) = read_settings()?;
     let command = hook_command(binary);
     let (updated, changes) = apply(&settings, &command, uninstall);
     if changes == 0 {
@@ -137,11 +154,7 @@ pub fn run(binary: &Path, uninstall: bool) -> anyhow::Result<String> {
             if uninstall { "uninstalled" } else { "installed" }
         ));
     }
-    if let Some(parent) = file.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(file.with_extension("json.bak"), &original)?;
-    std::fs::write(&file, format!("{}\n", serde_json::to_string_pretty(&updated)?))?;
+    write_settings(&file, &original, &updated)?;
     Ok(format!(
         "{}: {} {changes} hook event(s); previous version saved as settings.json.bak. \
          Running Claude Code sessions pick this up after /hooks or a restart.",

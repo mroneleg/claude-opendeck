@@ -6,7 +6,7 @@ Checklist for listing this plugin in the
 
 1. **Repository settings** (GitHub → About):
    - Description (must match the catalogue entry exactly):
-     `OpenDeck plugin: Claude plan usage, pace and alerts, plus Claude Code session status`
+     `OpenDeck plugin for Claude Code: plan usage with pace and alerts, session status that jumps to the waiting window`
    - Topic: `openaction`
 2. **A release** whose assets include `com.mroneleg.claudeusage.streamDeckPlugin`
    (push a `v<version>` tag; `.github/workflows/release.yml` builds and publishes it).
@@ -15,10 +15,10 @@ Checklist for listing this plugin in the
 
    ```json
    	"com.mroneleg.claudeusage": {
-   		"name": "Claude Usage",
+   		"name": "Claude Code Command Deck",
    		"author": "Mr. One Leg",
    		"repository": "https://github.com/mroneleg/claude-opendeck",
-   		"description": "OpenDeck plugin: Claude plan usage, pace and alerts, plus Claude Code session status",
+   		"description": "OpenDeck plugin for Claude Code: plan usage with pace and alerts, session status that jumps to the waiting window",
    		"flags": {
    			"ai_assisted": true
    		}

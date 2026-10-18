@@ -1,5 +1,5 @@
-//! Claude Usage for OpenDeck: Claude plan usage, pace and alerts, plus Claude
-//! Code session status, as an OpenAction / Stream Deck plugin.
+//! Claude Code Command Deck for OpenDeck: Claude plan usage, pace and alerts,
+//! plus Claude Code session status, as an OpenAction / Stream Deck plugin.
 
 pub mod activity;
 pub mod alerts;
@@ -14,4 +14,6 @@ pub mod plugin;
 pub mod process;
 pub mod render;
 pub mod sessions;
+pub mod statusline;
+pub mod theme;
 pub mod usage;

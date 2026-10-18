@@ -1,10 +1,12 @@
 //! `claude-opendeck hook`: the Claude Code hook that records each session's
-//! state for the "Claude Needs You" key. Reads the hook payload on stdin and
+//! state for the Session Status key. Reads the hook payload on stdin and
 //! writes `<cache>/claude-opendeck/sessions/<session_id>.json`.
 //!
 //! ```text
 //! Notification                    -> waiting (permission prompt, question), or
 //!                                    idle (no prompt for 60 s after finishing)
+//! PreToolUse for AskUserQuestion  -> waiting (the tool always asks you, and
+//!                                    its prompt's Notification comes ~6 s later)
 //! UserPromptSubmit, PreToolUse,
 //! PostToolUse(Failure),
 //! PermissionDenied                -> working
@@ -43,6 +45,7 @@ pub fn state_for(event: &Value) -> Option<&'static str> {
                 _ => Some("waiting"),
             }
         }
+        "PreToolUse" if event.get("tool_name").and_then(Value::as_str) == Some("AskUserQuestion") => Some("waiting"),
         "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "PermissionDenied" => {
             Some("working")
         }
@@ -96,12 +99,18 @@ pub fn handle(event: &Value, status_dir: &Path, claude_dir: &Path, chain: &[u32]
     let Some(state) = state_for(event) else {
         return Ok(());
     };
-    if ASYNC_TOOL_EVENTS.contains(&name)
-        && let Ok(text) = std::fs::read_to_string(&file)
-        && let Ok(current) = serde_json::from_str::<Value>(&text)
-        && just_started_waiting(&current, now)
-    {
-        return Ok(());
+    let current = std::fs::read_to_string(&file)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    if let Some(current) = &current {
+        if ASYNC_TOOL_EVENTS.contains(&name) && just_started_waiting(current, now) {
+            return Ok(());
+        }
+        // A finished session the user dismissed stays dismissed through the
+        // 60 s idle reminder; anything new (a prompt, a tool) brings it back.
+        if state == "idle" && current.get("state").and_then(Value::as_str) == Some("cleared") {
+            return Ok(());
+        }
     }
 
     // Claude Code's own pid is the nearest ancestor with a sessions entry;
@@ -199,6 +208,14 @@ mod tests {
                 "{working}"
             );
         }
+        assert_eq!(
+            state_for(&json!({"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion"})),
+            Some("waiting")
+        );
+        assert_eq!(
+            state_for(&json!({"hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion"})),
+            Some("working")
+        );
         assert_eq!(state_for(&json!({"hook_event_name": "Stop"})), Some("done"));
         assert_eq!(state_for(&json!({"hook_event_name": "SubagentStop"})), None);
         assert_eq!(state_for(&json!({})), None);
@@ -301,6 +318,18 @@ mod tests {
         assert_eq!(record["project"], "thing");
         assert_eq!(record["claudePid"], Value::Null);
         assert_eq!(record["pids"], json!([7, 8]));
+        // A dismissed session ignores the idle reminder but not new work.
+        std::fs::write(status.join("s2.json"), r#"{"state":"cleared"}"#).unwrap();
+        handle(
+            &json!({"session_id": "s2", "hook_event_name": "Notification", "notification_type": "idle_prompt"}),
+            &status,
+            &claude,
+            &[7],
+            2,
+        )
+        .unwrap();
+        assert_eq!(read(&status.join("s2.json"))["state"], "cleared");
+        handle(&event, &status, &claude, &[7, 8], 3).unwrap();
         // auth_success leaves the file alone.
         handle(
             &json!({"session_id": "s2", "hook_event_name": "Notification", "notification_type": "auth_success"}),

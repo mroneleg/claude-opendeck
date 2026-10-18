@@ -33,6 +33,16 @@ pub fn alerts_file() -> PathBuf {
     cache_dir().join("alerts.json")
 }
 
+/// The last successful usage response (see `usage::save_cached`).
+pub fn usage_cache_file() -> PathBuf {
+    cache_dir().join("usage.json")
+}
+
+/// 5h/7d figures saved by the `statusline` subcommand.
+pub fn statusline_file() -> PathBuf {
+    cache_dir().join("statusline.json")
+}
+
 /// Expands a leading `~` to the home directory.
 pub fn expand_home(dir: &str) -> PathBuf {
     let dir = dir.trim();

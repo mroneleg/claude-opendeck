@@ -12,10 +12,14 @@ use crate::paths;
 
 #[cfg(feature = "http")]
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+/// Test seam: point the plugin at a local stub instead of the real endpoint.
+#[cfg(feature = "http")]
+const USAGE_URL_ENV: &str = "CLAUDE_OPENDECK_USAGE_URL";
 #[cfg(feature = "http")]
 const OAUTH_BETA: &str = "oauth-2025-04-20";
 
-const HOUR_MS: i64 = 60 * 60 * 1000;
+const MINUTE_MS: i64 = 60 * 1000;
+const HOUR_MS: i64 = 60 * MINUTE_MS;
 pub const SESSION_WINDOW_MS: i64 = 5 * HOUR_MS;
 pub const WEEKLY_WINDOW_MS: i64 = 7 * 24 * HOUR_MS;
 
@@ -25,8 +29,18 @@ pub enum UsageError {
     NoLogin,
     /// The stored token expired or was rejected; running Claude Code renews it.
     Expired(String),
+    /// HTTP 429, with the server's Retry-After (ms) when it sent one.
+    RateLimited(Option<i64>),
     Http(u16),
     Network(String),
+}
+
+impl UsageError {
+    /// Local login problems: retrying sooner or later won't help until Claude
+    /// Code runs again, so they never back off.
+    pub fn is_login_problem(&self) -> bool {
+        matches!(self, Self::NoLogin | Self::Expired(_))
+    }
 }
 
 impl std::fmt::Display for UsageError {
@@ -34,6 +48,8 @@ impl std::fmt::Display for UsageError {
         match self {
             Self::NoLogin => write!(f, "No Claude Code login found"),
             Self::Expired(message) => write!(f, "{message}"),
+            Self::RateLimited(Some(ms)) => write!(f, "rate limited (retry after {}s)", ms / 1000),
+            Self::RateLimited(None) => write!(f, "rate limited"),
             Self::Http(status) => write!(f, "HTTP {status}"),
             Self::Network(message) => write!(f, "{message}"),
         }
@@ -202,6 +218,104 @@ pub fn parse_usage(body: &Value, now: i64) -> Usage {
     }
 }
 
+/// Longest wait between attempts while the endpoint keeps failing.
+pub const MAX_BACKOFF_MS: i64 = 30 * MINUTE_MS;
+
+/// How long to wait before the next fetch after `failures` consecutive
+/// transient failures (429, 5xx, network), starting from the normal refresh
+/// interval and doubling up to [`MAX_BACKOFF_MS`]. A server-sent Retry-After
+/// wins when it is longer than the computed wait, and is capped at an hour.
+pub fn backoff_ms(interval_ms: i64, failures: u32, retry_after_ms: Option<i64>) -> i64 {
+    let doubled = interval_ms.saturating_mul(1i64 << failures.min(16));
+    let computed = doubled.min(MAX_BACKOFF_MS).max(interval_ms);
+    match retry_after_ms {
+        Some(retry) => computed.max(retry.min(HOUR_MS)),
+        None => computed,
+    }
+}
+
+/// Parses a Retry-After header: delta-seconds or an HTTP date. Returns ms from `now`.
+pub fn parse_retry_after(value: &str, now: i64) -> Option<i64> {
+    let value = value.trim();
+    if let Ok(seconds) = value.parse::<i64>() {
+        return Some(seconds.max(0) * 1000);
+    }
+    chrono::DateTime::parse_from_rfc2822(value)
+        .ok()
+        .map(|time| (time.timestamp_millis() - now).max(0))
+}
+
+/// The last successful response, kept so restarts show numbers without an API call.
+pub fn save_cached(body: &Value, fetched_at: i64) {
+    let record = serde_json::json!({"fetchedAt": fetched_at, "body": body});
+    let _ = paths::write_atomic(&paths::usage_cache_file(), record.to_string().as_bytes());
+}
+
+/// Loads the cached response, if any, as parsed usage.
+pub fn load_cached() -> Option<Usage> {
+    let text = std::fs::read_to_string(paths::usage_cache_file()).ok()?;
+    parse_cached(&text)
+}
+
+pub fn parse_cached(text: &str) -> Option<Usage> {
+    let record: Value = serde_json::from_str(text).ok()?;
+    let fetched_at = record.get("fetchedAt")?.as_i64()?;
+    Some(parse_usage(record.get("body")?, fetched_at))
+}
+
+/// 5h/7d figures reported by Claude Code's status line (see `statusline`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BridgeWindow {
+    pub percent: f64,
+    pub resets_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Bridge {
+    pub five_hour: Option<BridgeWindow>,
+    pub seven_day: Option<BridgeWindow>,
+    pub updated_at: i64,
+}
+
+fn bridge_window(window: Option<BridgeWindow>, label: &str, window_ms: i64) -> Option<Window> {
+    window.map(|w| Window {
+        label: label.to_owned(),
+        percent: w.percent,
+        resets_at: w.resets_at,
+        window_ms,
+    })
+}
+
+/// Usage from the status line alone ("Status line only"): just 5h and 7d.
+pub fn usage_from_bridge(bridge: &Bridge) -> Usage {
+    Usage {
+        session: bridge_window(bridge.five_hour, "5h", SESSION_WINDOW_MS),
+        weekly: bridge_window(bridge.seven_day, "7d", WEEKLY_WINDOW_MS),
+        scoped: Vec::new(),
+        breakdown: Vec::new(),
+        spend: None,
+        extra_usage: None,
+        fetched_at: bridge.updated_at,
+    }
+}
+
+/// API usage with the 5h/7d windows replaced by newer status-line figures.
+/// Everything else (per-model, breakdown, spend) only the API provides.
+pub fn merge_bridge(api: &Usage, bridge: &Bridge) -> Usage {
+    if bridge.updated_at <= api.fetched_at {
+        return api.clone();
+    }
+    let mut merged = api.clone();
+    if let Some(session) = bridge_window(bridge.five_hour, "5h", SESSION_WINDOW_MS) {
+        merged.session = Some(session);
+    }
+    if let Some(weekly) = bridge_window(bridge.seven_day, "7d", WEEKLY_WINDOW_MS) {
+        merged.weekly = Some(weekly);
+    }
+    merged.fetched_at = bridge.updated_at;
+    merged
+}
+
 /// Expected usage % if spending evenly across the window, or None if unknown.
 pub fn expected_percent(window: &Window, now: i64) -> Option<f64> {
     let resets_at = window.resets_at?;
@@ -257,22 +371,28 @@ pub fn read_access_token() -> Result<String, UsageError> {
     token_from_credentials(&json, paths::now_ms())
 }
 
-#[cfg(not(feature = "http"))]
+/// Fetches and parses current usage. Blocking; run it off the async runtime.
 pub fn fetch_usage() -> Result<Usage, UsageError> {
+    fetch_usage_body().map(|body| parse_usage(&body, paths::now_ms()))
+}
+
+#[cfg(not(feature = "http"))]
+pub fn fetch_usage_body() -> Result<Value, UsageError> {
     Err(UsageError::Network("built without the `http` feature".into()))
 }
 
-/// Fetches and parses current usage. Blocking; run it off the async runtime.
+/// Fetches the endpoint's raw JSON body. Blocking.
 #[cfg(feature = "http")]
-pub fn fetch_usage() -> Result<Usage, UsageError> {
+pub fn fetch_usage_body() -> Result<Value, UsageError> {
     let token = read_access_token()?;
+    let url = std::env::var(USAGE_URL_ENV).unwrap_or_else(|_| USAGE_URL.to_owned());
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(10)))
         .http_status_as_error(false)
         .build()
         .into();
     let mut response = agent
-        .get(USAGE_URL)
+        .get(&url)
         .header("Authorization", &format!("Bearer {token}"))
         .header("anthropic-beta", OAUTH_BETA)
         .call()
@@ -283,14 +403,21 @@ pub fn fetch_usage() -> Result<Usage, UsageError> {
             "Login rejected; run Claude Code to renew it".into(),
         ));
     }
+    if status == 429 {
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| parse_retry_after(value, paths::now_ms()));
+        return Err(UsageError::RateLimited(retry_after));
+    }
     if !(200..300).contains(&status) {
         return Err(UsageError::Http(status));
     }
-    let body: Value = response
+    response
         .body_mut()
         .read_json()
-        .map_err(|error| UsageError::Network(error.to_string()))?;
-    Ok(parse_usage(&body, paths::now_ms()))
+        .map_err(|error| UsageError::Network(error.to_string()))
 }
 
 #[cfg(test)]
@@ -383,6 +510,74 @@ mod tests {
         let mut unknown = window(0);
         unknown.resets_at = None;
         assert_eq!(expected_percent(&unknown, 0), None);
+    }
+
+    #[test]
+    fn backoff_doubles_to_cap_and_honours_retry_after() {
+        let interval = 5 * MINUTE_MS;
+        assert_eq!(backoff_ms(interval, 0, None), interval);
+        assert_eq!(backoff_ms(interval, 1, None), 10 * MINUTE_MS);
+        assert_eq!(backoff_ms(interval, 2, None), 20 * MINUTE_MS);
+        assert_eq!(backoff_ms(interval, 3, None), MAX_BACKOFF_MS);
+        assert_eq!(backoff_ms(interval, 40, None), MAX_BACKOFF_MS);
+        // Retry-After longer than the schedule wins (capped at an hour)...
+        assert_eq!(backoff_ms(interval, 1, Some(15 * MINUTE_MS)), 15 * MINUTE_MS);
+        assert_eq!(backoff_ms(interval, 1, Some(5 * HOUR_MS)), HOUR_MS);
+        // ...but never shortens it.
+        assert_eq!(backoff_ms(interval, 2, Some(1000)), 20 * MINUTE_MS);
+        // A long refresh interval is never shortened by the cap.
+        assert_eq!(backoff_ms(HOUR_MS, 3, None), HOUR_MS);
+    }
+
+    #[test]
+    fn parses_retry_after_forms() {
+        assert_eq!(parse_retry_after("120", 0), Some(120_000));
+        assert_eq!(parse_retry_after(" -3 ", 0), Some(0));
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-18T03:00:00Z")
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(parse_retry_after("Sun, 18 Oct 2026 03:02:00 GMT", now), Some(120_000));
+        assert_eq!(parse_retry_after("soon", now), None);
+    }
+
+    #[test]
+    fn cached_response_round_trips() {
+        let text = json!({"fetchedAt": 1234, "body": sample()}).to_string();
+        let usage = parse_cached(&text).unwrap();
+        assert_eq!(usage.fetched_at, 1234);
+        assert_eq!(usage.weekly.unwrap().percent, 2.0);
+        assert!(parse_cached("{}").is_none());
+        assert!(parse_cached("not json").is_none());
+    }
+
+    #[test]
+    fn bridge_overrides_only_when_newer() {
+        let api = parse_usage(&sample(), 1000);
+        let bridge = Bridge {
+            five_hour: Some(BridgeWindow {
+                percent: 33.0,
+                resets_at: Some(9_000),
+            }),
+            seven_day: None,
+            updated_at: 2000,
+        };
+        let merged = merge_bridge(&api, &bridge);
+        assert_eq!(merged.session.as_ref().unwrap().percent, 33.0);
+        assert_eq!(merged.session.as_ref().unwrap().resets_at, Some(9_000));
+        // Windows the bridge doesn't know keep the API values; extras stay.
+        assert_eq!(merged.weekly.as_ref().unwrap().percent, 2.0);
+        assert_eq!(merged.scoped.len(), 2);
+        assert_eq!(merged.fetched_at, 2000);
+        // Older bridge data is ignored.
+        let old = Bridge {
+            updated_at: 500,
+            ..bridge
+        };
+        assert_eq!(merge_bridge(&api, &old), api);
+        // Status line only: just the two windows.
+        let only = usage_from_bridge(&bridge);
+        assert!(only.weekly.is_none() && only.scoped.is_empty() && only.spend.is_none());
+        assert_eq!(only.session.unwrap().window_ms, SESSION_WINDOW_MS);
     }
 
     #[test]

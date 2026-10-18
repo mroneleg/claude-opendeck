@@ -1,7 +1,7 @@
 //! Desktop notifications for threshold alerts. Best effort: failures are logged.
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-const APP_NAME: &str = "Claude Usage";
+const APP_NAME: &str = "Claude Code Command Deck";
 
 pub async fn send(title: &str, body: &str) {
     if let Err(error) = imp::send(title, body).await {
