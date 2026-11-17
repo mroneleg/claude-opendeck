@@ -10,7 +10,7 @@ and a launcher. Keys and Stream Deck+ dials, with per-key colours.
 
 | Action | Shows | Tap | Hold | Dial |
 |---|---|---|---|---|
-| Plan Usage | Session (5 h) and weekly (7 d) usage, one of them, or the highest per-model weekly limit. A white tick marks where even spending would be ("on pace" / "+N% pace" / "−N% pace") | Next display mode | Refresh | Turn: mode · Push/touch: refresh |
+| Plan Usage | Session (5 h) and weekly (7 d) usage, one of them, or the highest per-model weekly limit. A white tick marks where even spending would be ("on pace" / "+N% pace" / "−N% pace"). Single-window modes can draw an (optionally animated) ring gauge, and resets can show as local time instead of a countdown | Next display mode | Refresh | Turn: mode · Push/touch: refresh |
 | Usage Breakdown | This week's usage by surface (Claude Code, Chats, …) | Refresh | Refresh | |
 | Extra Usage | Spending on usage credits beyond your plan, against its limit | Refresh | Refresh | |
 | Session Status | Orange when a Claude Code session (terminal or VS Code) waits for permission or an answer; optionally blue while working and green when done | Jump to the waiting session, or clear finished ones | Open the latest session | Turn: pick a session · Push/touch: jump to it |

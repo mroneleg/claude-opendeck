@@ -1,6 +1,7 @@
 //! Key images rendered as SVG data URIs (OpenDeck rasterises them with resvg).
 
 use base64_encode::encode as base64;
+use chrono::TimeZone;
 
 use crate::activity::Totals;
 use crate::sessions::Status;
@@ -152,6 +153,33 @@ pub fn format_countdown(timestamp: Option<i64>, now: i64) -> String {
     }
 }
 
+/// When `timestamp` is: a countdown, or (with `clock`) the local wall-clock time.
+pub fn format_reset(timestamp: Option<i64>, now: i64, clock: bool) -> String {
+    if clock {
+        format_reset_clock(timestamp, now, &chrono::Local)
+    } else {
+        format_countdown(timestamp, now)
+    }
+}
+
+/// "23:59", or "Thu 07:00" when it isn't today in `tz`; rounded to the minute.
+pub fn format_reset_clock<Tz: TimeZone>(timestamp: Option<i64>, now: i64, tz: &Tz) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    let local = |ms: i64| tz.timestamp_millis_opt(ms).single();
+    let rounded = timestamp.map(|ms| (ms + 30_000).div_euclid(60_000) * 60_000);
+    let (Some(at), Some(today)) = (rounded.and_then(local), local(now)) else {
+        return String::new();
+    };
+    let format = if at.date_naive() == today.date_naive() {
+        "%H:%M"
+    } else {
+        "%a %H:%M"
+    };
+    at.format(format).to_string()
+}
+
 fn pct(percent: f64) -> String {
     format!("{}%", percent.round() as i64)
 }
@@ -169,7 +197,7 @@ pub fn pace(window: &Window, now: i64) -> Option<(String, &'static str, f64)> {
     })
 }
 
-fn both_image(session: Option<&Window>, weekly: Option<&Window>, now: i64) -> String {
+fn both_image(session: Option<&Window>, weekly: Option<&Window>, now: i64, clock: bool) -> String {
     let rows: String = [session, weekly]
         .iter()
         .enumerate()
@@ -222,7 +250,7 @@ fn both_image(session: Option<&Window>, weekly: Option<&Window>, now: i64) -> St
             row + &text(
                 132.0,
                 top + 58.0,
-                &format_countdown(w.resets_at, now),
+                &format_reset(w.resets_at, now, clock),
                 Text {
                     size: 12,
                     color: MUTED,
@@ -235,7 +263,7 @@ fn both_image(session: Option<&Window>, weekly: Option<&Window>, now: i64) -> St
     image(&rows)
 }
 
-fn single_image(window: Option<&Window>, title: &str, now: i64) -> String {
+fn single_image(window: Option<&Window>, title: &str, now: i64, clock: bool) -> String {
     let Some(w) = window else {
         return message_image(title, "n/a", MUTED);
     };
@@ -276,7 +304,7 @@ fn single_image(window: Option<&Window>, title: &str, now: i64) -> String {
     body += &text(
         72.0,
         136.0,
-        &format!("resets {}", format_countdown(w.resets_at, now)),
+        &format!("resets {}", format_reset(w.resets_at, now, clock)),
         Text {
             size: 13,
             color: MUTED,
@@ -310,15 +338,125 @@ pub fn message_image(line1: &str, line2: &str, color: &str) -> String {
     )
 }
 
-pub fn usage_image(usage: &Usage, mode: &str, now: i64) -> String {
+/// Animation frame for a ring: the eased fill percent and a clock in seconds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Anim {
+    pub shown: f64,
+    pub t: f64,
+}
+
+/// How a usage key draws its numbers.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Look {
+    pub ring: bool,
+    /// Reset as local wall-clock time instead of a countdown.
+    pub clock: bool,
+    pub anim: Option<Anim>,
+}
+
+/// The one window (and its title) a single-window mode shows; None for "both".
+pub fn focus_window<'a>(usage: &'a Usage, mode: &str) -> Option<(Option<&'a Window>, String)> {
     match mode {
-        "session" => single_image(usage.session.as_ref(), "Session", now),
-        "weekly" => single_image(usage.weekly.as_ref(), "Weekly", now),
-        "model" => match usage.scoped.first() {
-            Some(top) => single_image(Some(top), &format!("{} weekly", top.label), now),
-            None => message_image("Per-model", "no model limits", MUTED),
+        "session" => Some((usage.session.as_ref(), "Session".into())),
+        "weekly" => Some((usage.weekly.as_ref(), "Weekly".into())),
+        "model" => usage
+            .scoped
+            .first()
+            .map(|top| (Some(top), format!("{} weekly", top.label))),
+        _ => None,
+    }
+}
+
+/// One window as a ring gauge; `anim` eases the fill and circles a comet round the empty track.
+fn ring_image(window: Option<&Window>, title: &str, now: i64, clock: bool, anim: Option<Anim>) -> String {
+    const CX: f64 = 72.0;
+    const CY: f64 = 78.0;
+    const R: f64 = 42.0;
+    let Some(w) = window else {
+        return message_image(title, "n/a", MUTED);
+    };
+    let circumference = std::f64::consts::TAU * R;
+    let shown = anim.map_or(w.percent, |a| a.shown).clamp(0.0, 100.0);
+    // Point on the ring at `percent`, clockwise from 12 o'clock.
+    let at = |percent: f64, radius: f64| {
+        let angle = (percent * 3.6 - 90.0).to_radians();
+        (CX + radius * angle.cos(), CY + radius * angle.sin())
+    };
+    let mut body =
+        text(
+            72.0,
+            22.0,
+            &truncate(title, 14),
+            Text {
+                size: 14,
+                color: MUTED,
+                bold: true,
+                ..TEXT
+            },
+        ) + &format!(r#"<circle cx="{CX}" cy="{CY}" r="{R}" fill="none" stroke="{TRACK}" stroke-width="10"/>"#);
+    if shown > 0.0 {
+        body += &format!(
+            r#"<circle cx="{CX}" cy="{CY}" r="{R}" fill="none" stroke="{}" stroke-width="10" stroke-linecap="round" stroke-dasharray="{:.1} {circumference:.1}" transform="rotate(-90 {CX} {CY})"/>"#,
+            color_for(w.percent),
+            circumference * shown / 100.0
+        );
+    }
+    if let Some(anim) = anim
+        && shown < 100.0
+    {
+        // The head travels 15% of the ring a second through the unfilled part; the tail fades behind it.
+        let empty = 100.0 - shown;
+        let head = shown + (anim.t * 15.0) % empty;
+        for i in 0..6 {
+            let p = head - f64::from(i) * 1.5;
+            if p > shown {
+                let (x, y) = at(p, R);
+                body += &format!(
+                    r#"<circle cx="{x:.1}" cy="{y:.1}" r="{:.1}" fill="{CLAUDE}" opacity="{:.2}"/>"#,
+                    3.5 - f64::from(i) * 0.4,
+                    1.0 - f64::from(i) * 0.15
+                );
+            }
+        }
+    }
+    if let Some((_, _, expected)) = pace(w, now) {
+        let (x1, y1) = at(expected, R - 8.0);
+        let (x2, y2) = at(expected, R + 8.0);
+        body += &format!(
+            r#"<line x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}" stroke="{FG}" stroke-width="3" stroke-linecap="round"/>"#
+        );
+    }
+    body += &text(
+        CX,
+        CY + 10.0,
+        &pct(shown),
+        Text {
+            size: 28,
+            bold: true,
+            color: if w.percent >= 70.0 { color_for(w.percent) } else { FG },
+            ..TEXT
         },
-        _ => both_image(usage.session.as_ref(), usage.weekly.as_ref(), now),
+    );
+    body += &text(
+        72.0,
+        139.0,
+        &format!("resets {}", format_reset(w.resets_at, now, clock)),
+        Text {
+            size: 12,
+            color: MUTED,
+            ..TEXT
+        },
+    );
+    image(&body)
+}
+
+/// A usage key: one window as bars or a ring, or both windows as bars.
+pub fn usage_image(usage: &Usage, mode: &str, now: i64, look: Look) -> String {
+    match focus_window(usage, mode) {
+        Some((window, title)) if look.ring => ring_image(window, &title, now, look.clock, look.anim),
+        Some((window, title)) => single_image(window, &title, now, look.clock),
+        None if mode == "model" => message_image("Per-model", "no model limits", MUTED),
+        None => both_image(usage.session.as_ref(), usage.weekly.as_ref(), now, look.clock),
     }
 }
 
@@ -831,7 +969,7 @@ fn strip_row(window: &Window, y: f64, now: i64) -> String {
 }
 
 /// Usage on a dial's touch strip, in the key's display mode.
-pub fn usage_strip(usage: &Usage, mode: &str, now: i64) -> String {
+pub fn usage_strip(usage: &Usage, mode: &str, now: i64, clock: bool) -> String {
     let single = |window: Option<&Window>, title: &str| match window {
         None => strip(
             &text(100.0, 56.0, &format!("{title}: n/a"), Text { color: MUTED, ..TEXT }),
@@ -862,7 +1000,7 @@ pub fn usage_strip(usage: &Usage, mode: &str, now: i64) -> String {
             body += &text(
                 12.0,
                 94.0,
-                &format!("resets {}", format_countdown(w.resets_at, now)),
+                &format!("resets {}", format_reset(w.resets_at, now, clock)),
                 Text {
                     size: 12,
                     color: MUTED,
@@ -1039,6 +1177,55 @@ mod tests {
         assert_eq!(format_tokens(999), "999");
         assert_eq!(format_tokens(1234), "1.2k");
         assert_eq!(format_tokens(32_327_629), "32.3M");
+    }
+
+    #[test]
+    fn reset_clock() {
+        let utc = |h, m, s| {
+            chrono::Utc
+                .with_ymd_and_hms(2026, 11, 17, h, m, s)
+                .unwrap()
+                .timestamp_millis()
+        };
+        let gmt = chrono::FixedOffset::east_opt(0).unwrap();
+        let now = utc(10, 0, 0);
+        assert_eq!(format_reset_clock(Some(utc(15, 30, 10)), now, &gmt), "15:30");
+        // Rounds up past midnight into the next day (2026-11-17 is a Tuesday).
+        assert_eq!(format_reset_clock(Some(utc(23, 59, 40)), now, &gmt), "Wed 00:00");
+        assert_eq!(format_reset_clock(None, now, &gmt), "");
+        // 23:00 UTC is still the same evening five hours west.
+        let west = chrono::FixedOffset::west_opt(5 * 3600).unwrap();
+        assert_eq!(format_reset_clock(Some(utc(23, 0, 0)), now, &west), "18:00");
+        assert_eq!(format_reset(Some(now + 60_000 * 133), now, false), "2h 13m");
+    }
+
+    #[test]
+    fn ring_gauge() {
+        let w = |percent| Window {
+            label: "5h".into(),
+            percent,
+            resets_at: None,
+            window_ms: 100,
+        };
+        let svg =
+            |window: &Window, anim| svg_from_data_uri(&ring_image(Some(window), "Session", 0, false, anim)).unwrap();
+        let half = svg(&w(50.0), None);
+        assert!(half.contains(r#"stroke-dasharray="131.9 263.9""#) && half.contains("50%"));
+        assert!(!svg(&w(0.0), None).contains("stroke-dasharray"));
+        // Animated: the fill and number follow the eased value, and a comet appears.
+        let frame = svg(&w(80.0), Some(Anim { shown: 25.0, t: 1.0 }));
+        assert!(frame.contains("25%") && frame.contains("opacity="));
+        let mut usage = crate::usage::parse_usage(&serde_json::json!({}), 0);
+        usage.session = Some(w(50.0));
+        let look = Look {
+            ring: true,
+            ..Look::default()
+        };
+        let ring = svg_from_data_uri(&usage_image(&usage, "session", 0, look)).unwrap();
+        assert!(ring.contains("stroke-dasharray"));
+        // "both" keeps the bars even with the ring style.
+        let both = svg_from_data_uri(&usage_image(&usage, "both", 0, look)).unwrap();
+        assert!(!both.contains("stroke-dasharray"));
     }
 
     #[test]

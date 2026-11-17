@@ -33,6 +33,22 @@
       <span class="hint">Tap the key (or turn the dial) for the next mode; hold it to refresh. The white tick on each bar is where even spending across the window would be.</span>
     </div>
     <div class="row">
+      <label for="style">Style</label>
+      <select id="style">
+        <option value="bars">Bars</option>
+        <option value="ring">Ring gauge</option>
+      </select>
+      <span class="hint">The ring is used for single-window modes on keys; session + weekly and dials keep the bars.</span>
+    </div>
+    <div class="row check"><input id="animate" type="checkbox"><label for="animate">Animate the ring</label></div>
+    <div class="row">
+      <label for="resetFormat">Reset time</label>
+      <select id="resetFormat">
+        <option value="countdown">Countdown (2h 13m)</option>
+        <option value="clock">Local time (23:59)</option>
+      </select>
+    </div>
+    <div class="row">
       <label for="alertLow">Alert at (%)</label>
       <input id="alertLow" type="number" min="0" max="100" step="1">
     </div>
@@ -106,11 +122,12 @@
     const DEFAULTS = {
       mode: 'both', refreshMinutes: 5, alertLow: 80, alertHigh: 95, projectDir: '', terminalCommand: '',
       dataSource: 'api', lightWorking: false, lightDone: false, background: '', accent: '',
+      style: 'bars', animate: false, resetFormat: 'countdown',
     };
     const COLOR_DEFAULTS = { background: '#18181b', accent: '#d97757' };
     const NUMBERS = { refreshMinutes: 1, alertLow: 0, alertHigh: 0 };
-    const FIELDS = ['mode', 'refreshMinutes', 'alertLow', 'alertHigh', 'projectDir', 'terminalCommand', 'dataSource'];
-    const CHECKBOXES = ['lightWorking', 'lightDone'];
+    const FIELDS = ['mode', 'refreshMinutes', 'alertLow', 'alertHigh', 'projectDir', 'terminalCommand', 'dataSource', 'style', 'resetFormat'];
+    const CHECKBOXES = ['lightWorking', 'lightDone', 'animate'];
     const COLORS = ['background', 'accent'];
     const USAGE_KEYS = ['usage', 'breakdown', 'extrausage'];
     const $ = (id) => document.getElementById(id);

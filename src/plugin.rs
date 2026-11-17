@@ -52,6 +52,9 @@ const STATUSLINE_POLL: Duration = Duration::from_secs(2);
 const ACTIVITY_REFRESH_MS: i64 = 60 * 1000;
 const FLASH_MS: i64 = 6000;
 const FLASH_FRAME_MS: i64 = 500;
+// Animated rings redraw at 5 fps, easing this fraction of the way to the real value each frame.
+const RING_FRAME_MS: u64 = 200;
+const RING_EASE: f64 = 0.3;
 /// Held at least this long, a key press is a "hold" (refresh / open) rather than a tap.
 const HOLD_MS: u64 = 600;
 /// Numbers older than this get a "Xm ago" badge.
@@ -78,6 +81,11 @@ struct Settings {
     data_source: DataSource,
     light: LightUp,
     theme: Theme,
+    /// Single-window usage modes draw a ring gauge instead of a bar.
+    ring: bool,
+    animate: bool,
+    /// Reset as local wall-clock time instead of a countdown.
+    reset_clock: bool,
 }
 
 fn number(value: Option<&Value>) -> Option<f64> {
@@ -118,6 +126,9 @@ impl Settings {
                 &text("background").unwrap_or_default(),
                 &text("accent").unwrap_or_default(),
             ),
+            ring: text("style").as_deref() == Some("ring"),
+            animate: flag("animate").unwrap_or(false),
+            reset_clock: text("resetFormat").as_deref() == Some("clock"),
         }
     }
 }
@@ -153,6 +164,14 @@ struct Entry {
     press: Option<Press>,
     /// Session a dial is pointing at (index into `sessions::by_urgency`).
     selected: usize,
+    /// Percent an animated ring currently shows, easing toward the real value.
+    shown: f64,
+}
+
+impl Entry {
+    fn animated(&self) -> bool {
+        self.kind == Kind::Usage && !self.encoder && self.settings.ring && self.settings.animate
+    }
 }
 
 struct State {
@@ -273,7 +292,7 @@ fn no_data_message(state: &State, source: DataSource, now: i64) -> Option<(Strin
     })
 }
 
-fn usage_key_image(state: &State, entry: &Entry, now: i64) -> Option<String> {
+fn usage_key_image(state: &State, entry: &mut Entry, now: i64) -> Option<String> {
     let source = entry.settings.data_source;
     let theme = &entry.settings.theme;
     let Some(usage) = shown_usage(state, source) else {
@@ -303,8 +322,30 @@ fn usage_key_image(state: &State, entry: &Entry, now: i64) -> Option<String> {
     let image = match entry.kind {
         Kind::Breakdown => render::breakdown_image(&usage.breakdown),
         Kind::ExtraUsage => render::spend_image(usage.spend.as_ref()),
-        _ if entry.encoder => render::usage_strip(&usage, &entry.settings.mode, now),
-        _ => render::usage_image(&usage, &entry.settings.mode, now),
+        _ if entry.encoder => render::usage_strip(&usage, &entry.settings.mode, now, entry.settings.reset_clock),
+        _ => {
+            let anim = if entry.animated() {
+                let target = render::focus_window(&usage, &entry.settings.mode)
+                    .and_then(|(window, _)| window)
+                    .map_or(0.0, |w| w.percent);
+                entry.shown += (target - entry.shown) * RING_EASE;
+                if (target - entry.shown).abs() < 0.05 {
+                    entry.shown = target;
+                }
+                Some(render::Anim {
+                    shown: entry.shown,
+                    t: now as f64 / 1000.0,
+                })
+            } else {
+                None
+            };
+            let look = render::Look {
+                ring: entry.settings.ring,
+                clock: entry.settings.reset_clock,
+                anim,
+            };
+            render::usage_image(&usage, &entry.settings.mode, now, look)
+        }
     };
     Some(theme::finish(
         &image,
@@ -737,6 +778,21 @@ fn spawn_loops() {
             }
         }
     });
+    tokio::spawn(async {
+        let mut interval = tokio::time::interval(Duration::from_millis(RING_FRAME_MS));
+        loop {
+            interval.tick().await;
+            let ids: Vec<String> = state()
+                .entries
+                .iter()
+                .filter(|(_, e)| e.animated())
+                .map(|(id, _)| id.clone())
+                .collect();
+            if !ids.is_empty() {
+                render(Some(ids)).await;
+            }
+        }
+    });
 }
 
 // --- events ---------------------------------------------------------------------
@@ -756,6 +812,7 @@ async fn on_appear(instance: &Instance, kind: Kind, settings: &Value) {
             flash: None,
             press: None,
             selected: 0,
+            shown: 0.0,
         },
     );
     if encoder {
@@ -871,6 +928,8 @@ async fn cycle(instance: &Instance, steps: i64) {
         };
         entry.raw["mode"] = json!(mode);
         entry.settings = Settings::from_value(&entry.raw);
+        // An animated ring sweeps up again for the new window.
+        entry.shown = 0.0;
         entry.raw.clone()
     };
     let _ = instance.set_settings(&raw).await;
@@ -1200,6 +1259,10 @@ mod tests {
         let explicit = Settings::from_value(&json!({"includeIdle": true, "lightDone": false, "mode": "bogus"}));
         assert!(!explicit.light.done);
         assert_eq!(explicit.mode, "both");
+        // Bars, no animation and countdowns unless asked for.
+        assert!(!defaults.ring && !defaults.animate && !defaults.reset_clock);
+        let ring = Settings::from_value(&json!({"style": "ring", "animate": true, "resetFormat": "clock"}));
+        assert!(ring.ring && ring.animate && ring.reset_clock);
     }
 
     #[test]

@@ -58,7 +58,10 @@ fn main() -> anyhow::Result<()> {
 
     let from_uri = |uri: String| render::svg_from_data_uri(&uri).expect("our own data URI");
     let icons = [
-        ("usage", from_uri(render::usage_image(&usage, "both", now))),
+        (
+            "usage",
+            from_uri(render::usage_image(&usage, "both", now, render::Look::default())),
+        ),
         ("breakdown", from_uri(render::breakdown_image(&rows))),
         ("extrausage", from_uri(render::spend_image(Some(&spend)))),
         ("needsyou", from_uri(render::needs_you_image(1, Some("my-project"), 0))),
